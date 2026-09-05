@@ -1,0 +1,17 @@
+{
+  "version": 8,
+  "name": "Survey of India boundary outline",
+  "sources": {},
+  "layers": [
+    {
+      "id": "india-boundary-fill",
+      "type": "fill",
+      "paint": { "fill-color": "#1e3a8a", "fill-opacity": 0.03 }
+    },
+    {
+      "id": "india-boundary-outline",
+      "type": "line",
+      "paint": { "line-color": "#0f172a", "line-width": 1.6, "line-opacity": 0.9 }
+    }
+  ]
+}
