@@ -1,0 +1,18 @@
+{
+  "version": 8,
+  "name": "India Fire Detections",
+  "sources": {},
+  "layers": [
+    {
+      "id": "india-fire-detections",
+      "type": "circle",
+      "paint": {
+        "circle-color": "#ef2222",
+        "circle-radius": 6,
+        "circle-stroke-color": "#ffffff",
+        "circle-stroke-width": 1.5,
+        "circle-opacity": 0.95
+      }
+    }
+  ]
+}
