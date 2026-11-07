@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Sentinel-3 Fire Monitor</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+    <style>
+      * { box-sizing: border-box; }
+      body { margin: 0; font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      #map { height: 100vh; width: 100vw; background: #182534; }
+      .control-strip {
+        position: fixed; z-index: 1000; top: 16px; right: 16px; width: 360px;
+        padding: 16px; border-radius: 6px; background: rgba(255, 255, 255, .96);
+        box-shadow: 0 1px 5px rgba(0, 0, 0, .32); color: #17212b;
+      }
+      .map-title { font-size: 1.15rem; font-weight: 750; line-height: 1.2; }
+      .map-subtitle { margin-top: 3px; font-size: .82rem; color: #53606d; }
+      .map-metadata { display: grid; gap: 5px; margin: 15px 0; font-size: .86rem; line-height: 1.25; }
+      .map-metadata strong { font-weight: 700; }
+      .control-section { border-top: 1px solid #dce2e8; padding-top: 12px; }
+      .control-section + .control-section { margin-top: 12px; }
+      .control-section-heading { margin-bottom: 7px; font-size: .78rem; font-weight: 750; letter-spacing: .04em; text-transform: uppercase; color: #53606d; }
+      .control-option { display: flex; align-items: center; gap: 8px; min-height: 28px; font-size: .9rem; cursor: pointer; }
+      .control-option input { width: 15px; height: 15px; margin: 0; accent-color: #1a73e8; }
+      .zoom-buttons { display: flex; gap: 6px; margin-top: 14px; }
+      .zoom-buttons button { width: 32px; height: 32px; border: 1px solid #c7d0d9; border-radius: 4px; background: #fff; color: #17212b; font-size: 1.25rem; line-height: 1; cursor: pointer; }
+      .zoom-buttons button:hover { background: #f1f5f8; }
+      .powered-by { margin-top: 14px; font-size: .72rem; line-height: 1.35; color: #596673; }
+      .leaflet-popup-content { margin: 12px 14px; font-size: .86rem; }
+      @media (max-width: 550px) {
+        .control-strip { top: 10px; right: 10px; width: calc(100vw - 20px); max-width: 360px; }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="map" aria-label="Satellite map of India with Sentinel-3 fire detections"></div>
+    <aside class="control-strip" aria-label="Map controls and data status">
+      <div class="map-title">Sentinel-3 Fire Monitor</div>
+      <div class="map-subtitle">Dr. Ankur Awadhiya, IFS</div>
+      <div class="map-metadata">
+        <div><strong>24 hour detections:</strong> <span id="detection-count">Loading…</span></div>
+        <div><strong>Last refreshed:</strong> <span id="last-refreshed">Loading…</span></div>
+      </div>
+      <section class="control-section" aria-labelledby="basemap-heading">
+        <div id="basemap-heading" class="control-section-heading">Basemaps</div>
+        <label class="control-option"><input type="radio" name="basemap" value="google" checked> Google</label>
+        <label class="control-option"><input type="radio" name="basemap" value="esri"> ESRI</label>
+        <label class="control-option"><input type="radio" name="basemap" value="bing"> Bing</label>
+      </section>
+      <section class="control-section" aria-label="Data layers">
+        <label class="control-option"><input id="district-toggle" type="checkbox" checked> District Boundary (SoI)</label>
+        <label class="control-option"><input id="fire-toggle" type="checkbox" checked> Sentinel-3 Fire Detections</label>
+      </section>
+      <div class="zoom-buttons" aria-label="Map zoom controls">
+        <button id="zoom-in" type="button" aria-label="Zoom in">+</button>
+        <button id="zoom-out" type="button" aria-label="Zoom out">−</button>
+      </div>
+      <div class="powered-by">Powered by: Bing, ESA, ESRI, Google, Leaflet, SoI</div>
+    </aside>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+    <script>
+      const map = L.map("map", { attributionControl: false, zoomControl: false, preferCanvas: true });
+      const google = L.tileLayer("https://mt{s}.google.com/vt/lyrs=s&x={x}&y={y}&z={z}", { subdomains: "0123", maxZoom: 20 });
+      const esri = L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", { maxZoom: 19 });
+      const BingLayer = L.TileLayer.extend({
+        getTileUrl(coords) {
+          let quadKey = "";
+          for (let level = coords.z; level > 0; level -= 1) {
+            const mask = 1 << (level - 1);
+            let digit = 0;
+            if ((coords.x & mask) !== 0) digit += 1;
+            if ((coords.y & mask) !== 0) digit += 2;
+            quadKey += digit;
+          }
+          return `https://ecn.t${this._getSubdomain(coords)}.tiles.virtualearth.net/tiles/a${quadKey}.jpeg?g=1`;
+        }
+      });
+      const bing = new BingLayer("", { subdomains: "0123", maxZoom: 19 });
+      const basemaps = { google, esri, bing };
+      google.addTo(map);
+
+      const escapeHtml = value => String(value ?? "—").replace(/[&<>'"]/g, character => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" }[character]));
+      const districtLayer = L.geoJSON(null, {
+        style: { color: "#f8fbff", weight: 1.1, opacity: 0.85, fill: false },
+        onEachFeature: (feature, layer) => layer.bindPopup(`District: ${escapeHtml(feature.properties?.DISTRICT)}`)
+      }).addTo(map);
+      const fireLayer = L.geoJSON(null, {
+        pointToLayer: (feature, latlng) => L.circleMarker(latlng, { radius: 6, color: "#fff", weight: 1.2, fillColor: "#f20d0d", fillOpacity: 0.96 }),
+        onEachFeature: (feature, layer) => layer.bindPopup(`Coordinates: ${feature.geometry.coordinates[1].toFixed(5)}, ${feature.geometry.coordinates[0].toFixed(5)}`)
+      }).addTo(map);
+
+      const formatIst = timestamp => {
+        const date = new Date(timestamp);
+        const dateParts = new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Kolkata", day: "2-digit", month: "2-digit", year: "numeric" }).formatToParts(date);
+        const timeParts = new Intl.DateTimeFormat("en-US", { timeZone: "Asia/Kolkata", hour: "numeric", minute: "2-digit", hour12: true }).formatToParts(date);
+        const part = (parts, type) => parts.find(item => item.type === type)?.value;
+        const month = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][Number(part(dateParts, "month")) - 1];
+        return `${part(dateParts, "day")} ${month} ${part(dateParts, "year")}, ${part(timeParts, "hour")}:${part(timeParts, "minute")} ${part(timeParts, "dayPeriod")}`;
+      };
+      const setLayer = (layer, visible) => visible ? layer.addTo(map) : map.removeLayer(layer);
+      document.querySelectorAll("input[name='basemap']").forEach(input => input.addEventListener("change", event => {
+        Object.values(basemaps).forEach(layer => map.removeLayer(layer));
+        basemaps[event.target.value].addTo(map);
+      }));
+      document.getElementById("district-toggle").addEventListener("change", event => setLayer(districtLayer, event.target.checked));
+      document.getElementById("fire-toggle").addEventListener("change", event => setLayer(fireLayer, event.target.checked));
+      document.getElementById("zoom-in").addEventListener("click", () => map.zoomIn());
+      document.getElementById("zoom-out").addEventListener("click", () => map.zoomOut());
+
+      const dataUrl = (filename, fresh = false) => `${encodeURIComponent(filename)}${fresh ? `?v=${Date.now()}` : ""}`;
+      const loadJson = (filename, fresh = false) => fetch(dataUrl(filename, fresh)).then(response => {
+        if (!response.ok) throw new Error(`${filename}: ${response.status}`);
+        return response.json();
+      });
+      Promise.all([loadJson("Survey of India District Boundaries.geojson"), loadJson("India Fire Detections.geojson", true)])
+        .then(([districts, fires]) => {
+          districtLayer.addData(districts);
+          fireLayer.addData(fires);
+          map.fitBounds(districtLayer.getBounds(), { paddingTopLeft: [20, 20], paddingBottomRight: [385, 20] });
+          document.getElementById("detection-count").textContent = fires.features.length;
+          document.getElementById("last-refreshed").textContent = fires.generated_at_utc ? formatIst(fires.generated_at_utc) : "Unavailable";
+        })
+        .catch(error => {
+          console.error(error);
+          map.setView([22.5, 79], 4);
+          document.getElementById("detection-count").textContent = "Unavailable";
+          document.getElementById("last-refreshed").textContent = "Unavailable";
+        });
+    </script>
+  </body>
+</html>
